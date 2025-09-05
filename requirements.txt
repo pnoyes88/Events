@@ -1,0 +1,6 @@
+streamlit
+requests
+beautifulsoup4
+duckduckgo_search
+python-dateutil
+icalendar
