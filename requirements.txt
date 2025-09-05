@@ -1,6 +1,6 @@
 streamlit
 requests
 beautifulsoup4
-duckduckgo_search
+duckduckgo_search==6.2.6
 python-dateutil
 icalendar
