@@ -51,6 +51,216 @@ DEFAULT_HEADERS = {
 
 
 # ----------------------
+# Lightweight metadata tagging for filters
+# ----------------------
+EVENT_TYPE_KEYWORDS = {
+    "Music & Concerts": (
+        "concert",
+        "band",
+        "dj",
+        "symphony",
+        "orchestra",
+        "choir",
+        "gig",
+        "jazz",
+        "open mic",
+        "karaoke",
+        "live music",
+    ),
+    "Arts & Culture": (
+        "art",
+        "gallery",
+        "museum",
+        "theater",
+        "theatre",
+        "comedy",
+        "paint",
+        "craft",
+        "exhibit",
+        "poetry",
+        "reading",
+        "opera",
+        "film",
+    ),
+    "Food & Drink": (
+        "brew",
+        "beer",
+        "wine",
+        "tasting",
+        "dinner",
+        "food",
+        "culinary",
+        "restaurant",
+        "cook",
+        "bbq",
+        "brunch",
+        "food truck",
+        "farmers market",
+    ),
+    "Outdoor & Adventure": (
+        "hike",
+        "trail",
+        "kayak",
+        "canoe",
+        "paddle",
+        "outdoor",
+        "camp",
+        "park",
+        "nature",
+        "cleanup",
+        "run",
+        "marathon",
+        "bike",
+        "cycling",
+        "walk",
+    ),
+    "Sports & Fitness": (
+        "game",
+        "sports",
+        "soccer",
+        "basketball",
+        "baseball",
+        "football",
+        "fitness",
+        "yoga",
+        "workout",
+        "tournament",
+        "golf",
+        "pickleball",
+    ),
+    "Community & Causes": (
+        "fundraiser",
+        "charity",
+        "community",
+        "market",
+        "fair",
+        "festival",
+        "parade",
+        "volunteer",
+        "networking",
+        "meetup",
+        "block party",
+    ),
+    "Education & Workshops": (
+        "class",
+        "workshop",
+        "seminar",
+        "lecture",
+        "course",
+        "training",
+        "lesson",
+        "info session",
+        "bootcamp",
+    ),
+    "Nightlife & Parties": (
+        "party",
+        "nightlife",
+        "club",
+        "bar crawl",
+        "after dark",
+        "late night",
+    ),
+    "Family & Kids": (
+        "family",
+        "kid",
+        "kids",
+        "children",
+        "toddler",
+        "parents",
+        "storytime",
+        "story time",
+        "youth",
+    ),
+    "Film & Media": (
+        "movie",
+        "film",
+        "screening",
+        "cinema",
+        "documentary",
+    ),
+}
+
+AGE_KEYWORDS = {
+    "Family friendly": (
+        "family",
+        "kid",
+        "kids",
+        "children",
+        "toddler",
+        "storytime",
+        "story time",
+        "parent-child",
+        "parent child",
+    ),
+    "Teens": (
+        "teen",
+        "teens",
+        "youth",
+        "high school",
+        "middle school",
+    ),
+    "Adults": (
+        "adult",
+        "adults",
+        "professionals",
+        "networking",
+    ),
+    "Adults 21+": (
+        "21+",
+        "twenty-one",
+        "twenty one",
+        "must be 21",
+        "over 21",
+        "adults only",
+        "beer tasting",
+        "wine tasting",
+        "cocktail",
+    ),
+    "Seniors": (
+        "senior",
+        "seniors",
+        "55+",
+        "older adult",
+        "retiree",
+    ),
+}
+
+ALL_AGES_HINTS = (
+    "all ages",
+    "everyone welcome",
+    "open to all",
+    "entire family",
+    "whole family",
+    "family friendly",
+    "family-friendly",
+    "kid friendly",
+    "kid-friendly",
+)
+
+COST_KEYWORDS = {
+    "Free": (
+        "free",
+        "no cost",
+        "complimentary",
+        "no charge",
+        "free admission",
+        "donation based",
+        "donation-based",
+    ),
+    "Paid": (
+        "$",
+        "ticket",
+        "tickets",
+        "admission",
+        "cover charge",
+        "per person",
+        "entry fee",
+        "registration fee",
+    ),
+}
+
+
+# ----------------------
 # Weekend window
 # ----------------------
 def upcoming_weekend_range(user_tz="America/New_York"):
@@ -332,6 +542,62 @@ def filter_to_weekend(events, wk_start, wk_end):
 
 
 # ----------------------
+# Enrich events with heuristic metadata for filters
+# ----------------------
+def _event_text_blob(event):
+    parts = []
+    for key in ("name", "description", "location"):
+        val = event.get(key)
+        if not val:
+            continue
+        parts.append(str(val))
+    return " ".join(parts).lower()
+
+
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    if not keyword:
+        return False
+    keyword = keyword.lower()
+    if re.search(r"[^\w]", keyword):
+        return keyword in text
+    return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
+
+
+def enrich_event_metadata(event):
+    text = _event_text_blob(event)
+
+    categories = set()
+    for label, keywords in EVENT_TYPE_KEYWORDS.items():
+        if any(_keyword_in_text(kw, text) for kw in keywords):
+            categories.add(label)
+    if not categories:
+        categories.add("General")
+
+    age_tags = set()
+    for label, keywords in AGE_KEYWORDS.items():
+        if any(_keyword_in_text(kw, text) for kw in keywords):
+            age_tags.add(label)
+    all_ages_hint = any(hint in text for hint in ALL_AGES_HINTS)
+    if not age_tags:
+        age_tags.add("All ages")
+    if all_ages_hint or "Family friendly" in age_tags:
+        age_tags.add("All ages")
+    if {"Adults", "Adults 21+", "Seniors"} & age_tags and not (all_ages_hint or "Family friendly" in age_tags):
+        age_tags.discard("All ages")
+
+    cost_tag = "Unspecified"
+    if any(_keyword_in_text(kw, text) for kw in COST_KEYWORDS["Free"]):
+        cost_tag = "Free"
+    elif any(_keyword_in_text(kw, text) for kw in COST_KEYWORDS["Paid"]):
+        cost_tag = "Paid"
+
+    event["categories"] = sorted(categories)
+    event["age_tags"] = sorted(age_tags)
+    event["cost_tag"] = cost_tag
+    return event
+
+
+# ----------------------
 # Search & scrape pipeline
 # ----------------------
 def ddg_search_urls(query, max_results=6):
@@ -476,56 +742,125 @@ if search_btn:
     else:
         st.success(f"Found {len(results)} event candidates for the weekend.")
 
-        # Present table
-        table_rows = []
         for e in results:
-            s = e["start"].strftime("%a %b %d %I:%M %p") if isinstance(e["start"], datetime) else ""
-            en = e["end"].strftime("%a %b %d %I:%M %p") if isinstance(e["end"], datetime) else ""
-            table_rows.append({
-                "Event": e["name"],
-                "Start": s,
-                "End": en,
-                "Location": e["location"],
-                "Link": e["url"],
-                "Source Page": e["source"],
-                "Notes": (e["description"][:160] + "…") if len(e["description"]) > 160 else e["description"]
-            })
+            enrich_event_metadata(e)
 
-        st.markdown("### Results")
-        st.dataframe(table_rows, use_container_width=True)
+        all_categories = sorted({cat for e in results for cat in e.get("categories", [])})
+        all_age_tags = sorted({age for e in results for age in e.get("age_tags", [])})
+        all_cost_tags = sorted({e.get("cost_tag", "Unspecified") for e in results})
 
-        # CSV download
-        csv_buf = io.StringIO()
-        writer = csv.DictWriter(csv_buf, fieldnames=table_rows[0].keys())
-        writer.writeheader()
-        writer.writerows(table_rows)
-        st.download_button("⬇️ Download CSV", data=csv_buf.getvalue(),
-                           file_name=f"{_slugify(town)}_{state.upper()[:2]}_weekend_events.csv",
-                           mime="text/csv")
+        st.markdown("### Filter results")
+        filter_cols = st.columns(3)
+        selected_categories = all_categories
+        selected_age_tags = all_age_tags
+        selected_costs = all_cost_tags
 
-        # ICS download
-        if icalendar:
-            cal = icalendar.Calendar()
-            cal.add('prodid', '-//Weekend Events Finder//streamlit//')
-            cal.add('version', '2.0')
-            for e in results:
-                if not isinstance(e["start"], datetime):
-                    continue
-                ve = icalendar.Event()
-                ve.add('summary', e["name"])
-                ve.add('dtstart', e["start"])
-                if isinstance(e["end"], datetime):
-                    ve.add('dtend', e["end"])
-                if e["location"]:
-                    ve.add('location', e["location"])
-                desc = e["description"] or ""
-                if e["url"]:
-                    desc = (desc + "\n" if desc else "") + e["url"]
-                ve.add('description', desc)
-                cal.add_component(ve)
-            ics_bytes = cal.to_ical()
-            st.download_button("📆 Add to Calendar (ICS)", data=ics_bytes,
-                               file_name=f"{_slugify(town)}_{state.upper()[:2]}_weekend_events.ics",
-                               mime="text/calendar")
+        if all_categories:
+            with filter_cols[0]:
+                selected_categories = st.multiselect(
+                    "Event types",
+                    options=all_categories,
+                    default=all_categories,
+                    help="Filter events by the type of experience they offer.",
+                )
+        if all_age_tags:
+            with filter_cols[1]:
+                selected_age_tags = st.multiselect(
+                    "Age suitability",
+                    options=all_age_tags,
+                    default=all_age_tags,
+                    help="Highlight events that match your group.",
+                )
+        if all_cost_tags:
+            with filter_cols[2]:
+                selected_costs = st.multiselect(
+                    "Cost",
+                    options=all_cost_tags,
+                    default=all_cost_tags,
+                    help="Look for free events or hide items without pricing info.",
+                )
+
+        selected_categories_set = set(selected_categories)
+        selected_age_tags_set = set(selected_age_tags)
+        selected_costs_set = set(selected_costs)
+
+        filtered_results = []
+        for e in results:
+            if selected_categories_set and not (set(e.get("categories", [])) & selected_categories_set):
+                continue
+            if selected_age_tags_set and not (set(e.get("age_tags", [])) & selected_age_tags_set):
+                continue
+            if selected_costs_set and e.get("cost_tag", "Unspecified") not in selected_costs_set:
+                continue
+            filtered_results.append(e)
+
+        st.caption(f"Showing {len(filtered_results)} of {len(results)} events after filters.")
+
+        if not filtered_results:
+            st.warning("No events match the selected filters. Try broadening them or adjusting your search.")
         else:
-            st.info("Install `icalendar` to enable an ICS download.")
+            # Present table
+            table_rows = []
+            for e in filtered_results:
+                s = e["start"].strftime("%a %b %d %I:%M %p") if isinstance(e["start"], datetime) else ""
+                en = e["end"].strftime("%a %b %d %I:%M %p") if isinstance(e["end"], datetime) else ""
+                table_rows.append({
+                    "Event": e["name"],
+                    "Start": s,
+                    "End": en,
+                    "Location": e["location"],
+                    "Link": e["url"],
+                    "Source Page": e["source"],
+                    "Event Type": ", ".join(e.get("categories", [])),
+                    "Age": ", ".join(e.get("age_tags", [])),
+                    "Cost": e.get("cost_tag", "Unspecified"),
+                    "Notes": (e["description"][:160] + "…") if len(e["description"]) > 160 else e["description"],
+                })
+
+            st.markdown("### Results")
+            st.dataframe(table_rows, use_container_width=True)
+
+            # CSV download
+            csv_buf = io.StringIO()
+            writer = csv.DictWriter(csv_buf, fieldnames=table_rows[0].keys())
+            writer.writeheader()
+            writer.writerows(table_rows)
+            st.download_button("⬇️ Download CSV", data=csv_buf.getvalue(),
+                               file_name=f"{_slugify(town)}_{state.upper()[:2]}_weekend_events.csv",
+                               mime="text/csv")
+
+            # ICS download
+            if icalendar:
+                cal = icalendar.Calendar()
+                cal.add('prodid', '-//Weekend Events Finder//streamlit//')
+                cal.add('version', '2.0')
+                for e in filtered_results:
+                    if not isinstance(e["start"], datetime):
+                        continue
+                    ve = icalendar.Event()
+                    ve.add('summary', e["name"])
+                    ve.add('dtstart', e["start"])
+                    if isinstance(e["end"], datetime):
+                        ve.add('dtend', e["end"])
+                    if e["location"]:
+                        ve.add('location', e["location"])
+                    desc = e["description"] or ""
+                    meta_bits = []
+                    if e.get("categories"):
+                        meta_bits.append("Types: " + ", ".join(e["categories"]))
+                    if e.get("age_tags"):
+                        meta_bits.append("Ages: " + ", ".join(e["age_tags"]))
+                    if e.get("cost_tag") and e["cost_tag"] != "Unspecified":
+                        meta_bits.append("Cost: " + e["cost_tag"])
+                    if meta_bits:
+                        desc = ((desc + "\n") if desc else "") + " | ".join(meta_bits)
+                    if e["url"]:
+                        desc = (desc + "\n" if desc else "") + e["url"]
+                    ve.add('description', desc)
+                    cal.add_component(ve)
+                ics_bytes = cal.to_ical()
+                st.download_button("📆 Add to Calendar (ICS)", data=ics_bytes,
+                                   file_name=f"{_slugify(town)}_{state.upper()[:2]}_weekend_events.ics",
+                                   mime="text/calendar")
+            else:
+                st.info("Install `icalendar` to enable an ICS download.")
